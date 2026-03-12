@@ -8,7 +8,7 @@ A full-scale Wordle clone where every user gets the same 5-letter word each day.
 - **Package Manager:** pnpm
 - **Styling:** Tailwind CSS
 - **Database:** Neon Postgres (via Vercel Postgres)
-- **Auth:** NextAuth.js with Postgres adapter
+- **Auth:** NextAuth.js v5 with `@auth/neon-adapter`
 - **Deployment:** Vercel
 - **Cron Jobs:** Vercel Cron Jobs
 - **Word Generation:** Gemini API (`gemini-2.5-flash-lite`, free tier)
@@ -44,30 +44,49 @@ Users who install the PWA can opt in to streak reminders. The browser generates 
 
 ## Database Schema
 
+> Auth tables use camelCase columns as required by `@auth/neon-adapter`.
+
 ```sql
+-- Auth tables (managed by NextAuth adapter)
 CREATE TABLE users (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
   name TEXT,
-  email TEXT UNIQUE NOT NULL,
+  email TEXT UNIQUE,
+  "emailVerified" TIMESTAMPTZ,
   image TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE accounts (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+  "userId" TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
   provider TEXT NOT NULL,
-  provider_account_id TEXT NOT NULL,
+  "providerAccountId" TEXT NOT NULL,
+  refresh_token TEXT,
   access_token TEXT,
-  refresh_token TEXT
+  expires_at BIGINT,
+  token_type TEXT,
+  scope TEXT,
+  id_token TEXT,
+  session_state TEXT
 );
 
 CREATE TABLE sessions (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+  "sessionToken" TEXT UNIQUE NOT NULL,
+  "userId" TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   expires TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE verification_tokens (
+  identifier TEXT NOT NULL,
+  token TEXT NOT NULL,
+  expires TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (identifier, token)
+);
+
+-- App tables
 CREATE TABLE daily_words (
   id SERIAL PRIMARY KEY,
   word VARCHAR(5) NOT NULL,
@@ -97,7 +116,7 @@ CREATE TABLE user_stats (
 CREATE TABLE push_subscriptions (
   id SERIAL PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  subscription JSONB NOT NULL, -- full Web Push subscription object
+  subscription JSONB NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
@@ -108,23 +127,36 @@ CREATE TABLE push_subscriptions (
 
 - Node.js 24+
 - pnpm
-- A Neon Postgres database
-- A Google Gemini API key
-- A NextAuth secret
+- A [Neon](https://neon.tech) Postgres database
+- A Google Cloud OAuth 2.0 client (for sign-in)
+- A Google Gemini API key (for word generation)
 
 ### Environment Variables
 
 Create a `.env.local` file:
 
 ```env
+# Neon Postgres
 DATABASE_URL=
-NEXTAUTH_SECRET=
-NEXTAUTH_URL=
+
+# NextAuth
+AUTH_SECRET=        # generate with: npx auth secret
+NEXTAUTH_URL=http://localhost:3000
+
+# Google OAuth
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Gemini
 GEMINI_API_KEY=
+
+# Web Push (VAPID)
 NEXT_PUBLIC_VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
 VAPID_SUBJECT=mailto:you@example.com
 ```
+
+> For production (Vercel), set `NEXTAUTH_URL=https://wordle-clone-pwa.vercel.app`
 
 ### Development
 
@@ -148,6 +180,7 @@ pnpm format:check # Prettier (check only)
 
 - **CI:** GitHub Actions — type check, lint, format check, and build on every push/PR to `main`
 - **CD:** Vercel — auto-deploys on push to `main`, preview deployments for PRs
+- **Production:** https://wordle-clone-pwa.vercel.app
 
 ## Out of Scope
 
